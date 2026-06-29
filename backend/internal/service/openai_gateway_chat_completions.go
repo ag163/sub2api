@@ -761,7 +761,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		}
 	}
 	missingTerminalErr := func() (*OpenAIForwardResult, error) {
-		s.tempUnscheduleOpenAIStreamIncomplete(ctx, account, requestID, "missing terminal event")
+		s.tempUnscheduleOpenAIStreamIncomplete(c.Request.Context(), account, requestID, "missing terminal event")
 		return resultWithUsage(), fmt.Errorf("stream usage incomplete: missing terminal event")
 	}
 	processFrame := func(frame openAICompatSSEFrame) bool {
