@@ -163,6 +163,23 @@ func TestTempUnscheduleOpenAITransportError_NilAccountRepo_InMemoryBlockOnly(t *
 		"in-memory block must apply even when accountRepo is nil")
 }
 
+func TestTempUnscheduleOpenAIStreamIncomplete_PersistsAndBlocksRuntime(t *testing.T) {
+	repo := &openaiTransportAccountRepoStub{}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	account := &Account{ID: 83, Name: "stream-cut", Platform: PlatformOpenAI}
+
+	before := time.Now()
+	svc.tempUnscheduleOpenAIStreamIncomplete(context.Background(), account, "req_stream_1", "missing terminal event")
+	after := time.Now()
+
+	require.Len(t, repo.tempUnschedCalls, 1)
+	require.Equal(t, int64(83), repo.tempUnschedCalls[0].accountID)
+	require.Contains(t, repo.tempUnschedCalls[0].reason, "missing terminal event")
+	require.True(t, repo.tempUnschedCalls[0].until.After(before.Add(openAIStreamIncompleteTempUnschedDuration-time.Second)))
+	require.True(t, repo.tempUnschedCalls[0].until.Before(after.Add(openAIStreamIncompleteTempUnschedDuration+time.Second)))
+	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+}
+
 // context.DeadlineExceeded is NOT special-cased — a slow upstream is worth failing over.
 func TestHandleOpenAIUpstreamTransportError_DeadlineExceeded_StillFailsOver(t *testing.T) {
 	repo := &openaiTransportAccountRepoStub{}

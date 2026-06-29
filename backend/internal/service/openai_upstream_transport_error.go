@@ -18,6 +18,13 @@ import (
 // unscheduled after a durable transport failure (matches tokenRefreshTempUnschedDuration).
 const openAITransportErrorTempUnschedDuration = 10 * time.Minute
 
+// openAIStreamIncompleteTempUnschedDuration is how long an account is
+// temporarily unscheduled after it closes an OpenAI stream without a terminal
+// event. This uses the same short quarantine window as durable transport
+// failures: long enough for scheduling to move on, short enough to recover
+// automatically if the upstream blip clears.
+const openAIStreamIncompleteTempUnschedDuration = 10 * time.Minute
+
 // openAITransportFailoverBody is the OpenAI-format error body attached to the
 // failover error for a transport-level failure. Kept identical to the legacy
 // inline 502 body so the client-visible payload is unchanged if failover is
@@ -189,5 +196,57 @@ func (s *OpenAIGatewayService) tempUnscheduleOpenAITransportError(ctx context.Co
 		zap.String("platform", account.Platform),
 		zap.Time("until", until),
 		zap.String("reason", reason),
+	)
+}
+
+// tempUnscheduleOpenAIStreamIncomplete marks an account temporarily
+// unschedulable after an upstream OpenAI stream ends without a terminal event.
+// Once client output has started the current SSE response cannot be safely
+// replayed on another account, but the account still needs to be quarantined so
+// the next request is scheduled elsewhere.
+func (s *OpenAIGatewayService) tempUnscheduleOpenAIStreamIncomplete(ctx context.Context, account *Account, upstreamRequestID string, reasonDetail string) {
+	if s == nil || account == nil {
+		return
+	}
+	until := time.Now().Add(openAIStreamIncompleteTempUnschedDuration)
+	reason := "upstream stream incomplete: missing terminal event"
+	if detail := sanitizeUpstreamErrorMessage(strings.TrimSpace(reasonDetail)); detail != "" {
+		reason += ": " + detail
+	}
+
+	// Immediate in-memory block so the scheduler skips this account even before
+	// the persistent account state is refreshed.
+	s.BlockAccountScheduling(account, until, "stream_incomplete")
+
+	loggerFields := []zap.Field{
+		zap.Int64("account_id", account.ID),
+		zap.String("account_name", account.Name),
+		zap.String("platform", account.Platform),
+		zap.String("upstream_request_id", strings.TrimSpace(upstreamRequestID)),
+		zap.Time("until", until),
+		zap.String("reason", reason),
+	}
+
+	if s.accountRepo == nil {
+		logger.L().With(zap.String("component", "service.openai_gateway")).Warn(
+			"openai.account_temp_unscheduled_stream_incomplete_memory_only",
+			loggerFields...,
+		)
+		return
+	}
+
+	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openAIAccountStateUpdateTimeout)
+	defer cancel()
+	if err := s.accountRepo.SetTempUnschedulable(bgCtx, account.ID, until, reason); err != nil {
+		logger.L().With(zap.String("component", "service.openai_gateway")).Warn(
+			"openai.account_temp_unscheduled_stream_incomplete_failed",
+			append(loggerFields, zap.Error(err))...,
+		)
+		return
+	}
+
+	logger.L().With(zap.String("component", "service.openai_gateway")).Warn(
+		"openai.account_temp_unscheduled_stream_incomplete",
+		loggerFields...,
 	)
 }

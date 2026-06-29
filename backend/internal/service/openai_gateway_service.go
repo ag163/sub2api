@@ -4131,6 +4131,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			zap.Int64("account_id", account.ID),
 			zap.String("upstream_request_id", upstreamRequestID),
 		).Info("OpenAI passthrough 上游流在未收到 [DONE] 时结束，疑似断流")
+		s.tempUnscheduleOpenAIStreamIncomplete(ctx, account, upstreamRequestID, "missing terminal event")
 		if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
 			return resultWithUsage(),
 				s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, nil, "OpenAI stream ended before a terminal event")
@@ -4900,6 +4901,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	}
 	finalizeStream := func() (*openaiStreamingResult, error) {
 		if !sawTerminalEvent {
+			s.tempUnscheduleOpenAIStreamIncomplete(ctx, account, upstreamRequestID, "missing terminal event")
 			if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
 				return resultWithUsage(), s.newOpenAIStreamFailoverError(
 					c,
